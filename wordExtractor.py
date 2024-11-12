@@ -1,52 +1,48 @@
+import pickle
+import numpy as np
 import cv2
 import os
-import pickle
+import matplotlib.pyplot as plt
 
-
-class Process:
-    def __init__(self, image_directory, show):
-        self.working_directory = image_directory
+class ImageProcessor:
+    def __init__(self, image_shape=(512, 512), show=False, verbose=0):
         self.show = show
+        self.verbose = verbose
+        self.outputs = None
+        self.image_height, self.image_width = image_shape
 
+    def image_to_array(self, image_path):
+        img = cv2.imread(image_path)
+        return img
 
-    def create_image_array(self, path):
-        data_list = []
-        img = cv2.imread(os.path.join(self.working_directory, path))
-        #contrast, brightness = (1.4, 1.4)
-        #img = cv2.addWeighted(img, contrast, img, 0, brightness)
-        grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        otsu1 = cv2.threshold(grey, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)[1]
+    def process_directory(self, image_directory):
+        self.image_directory = image_directory
+        data_arrays = []
+        for filename in os.listdir(self.image_directory):
+            image_path = os.path.join(self.image_directory, filename)
+            img_array = self.image_to_array(image_path)
+            if img_array is not None:
+                self.resize(img_array, self.image_height, self.image_width)
+                processed_image = self.extract(img_array)
+                if processed_image is not None:
+                    processed_image = self.to_numpy(processed_image)
+                    data_arrays.append(processed_image)
+            else:
+                if self.verbose:
+                    print(f"{filename} ignored: invalid or unreadable file.")
+        return data_arrays
 
-        horz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 1))
-        lines = cv2.morphologyEx(otsu1, cv2.MORPH_OPEN, horz_kernel, iterations=1)
-        cnts = cv2.findContours(lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cnts = cnts[0] if len(cnts) == 2 else cnts[1]
+    def process_image(self, image_path):
+        img_array = self.image_to_array(image_path)
+        
+        if img_array is not None:
+            resized_image = self.resize_image(img_array, self.image_height, self.image_width)
+            data_arrays = self.extract(resized_image)
+            return data_arrays
+        else:
+            raise FileNotFoundError(f"Problem while reading image at {image_path}: invalid or unreadable file.")
 
-        for c in cnts:
-            cv2.drawContours(img, [c], -1, (255, 255, 255), 2)
-
-        grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        otsu2 = cv2.threshold(grey, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)[1]
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (60, 6))
-        dilation = cv2.dilate(otsu2, kernel, iterations=1)
-
-        contours, hierarchy = cv2.findContours(dilation, cv2.RETR_EXTERNAL,
-                                               cv2.CHAIN_APPROX_NONE)
-        count = 0
-        for j, c in enumerate(contours):
-            x, y, w, h = cv2.boundingRect(c)
-            if w > 90 and h > 20:
-                count += 1
-                out = cv2.resize(otsu2[y:h + y, x:w + x], (256, 64))
-                data_list.append(out)
-                rect = cv2.rectangle(otsu2, (x, y), (x + w, y + h), (255, 255, 255), 2)
-        if self.show:
-            cv2.imshow(path, otsu2)
-            cv2.waitKey(0)
-        return data_list
-
-
-    def equify(self, array):
+    def to_numpy(self, array):
         arr = [len(i) for i in array]
         MAX = max(arr)
         for sub in array:
@@ -55,37 +51,86 @@ class Process:
             while len(sub) < MAX:
                 sub.append(sub[count % x])
                 count += 1
-        return array
+        return np.array(array)
+
+    def resize_image(self, image, width, height):
+        return cv2.resize(image, (width, height))
+
+    def extract(self, img):
+        result_img = img.copy()
+        lines_removed = img.copy()
+        grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        otsu1 = cv2.threshold(grey, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)[1]
+
+        horz_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (8, 1))
+        lines = cv2.morphologyEx(otsu1, cv2.MORPH_OPEN, horz_kernel, iterations=2)
+        cnts, _ = cv2.findContours(lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for c in cnts:
+            cv2.drawContours(lines_removed, [c], -1, (255, 255, 255), 2)
+
+        grey = cv2.cvtColor(lines_removed, cv2.COLOR_BGR2GRAY)
+        otsu2 = cv2.threshold(grey, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)[1]
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 6))
+        dilation = cv2.dilate(otsu2, kernel, iterations=1)
+        # opening
+        dilation = cv2.morphologyEx(dilation, cv2.MORPH_OPEN,
+                        cv2.getStructuringElement(cv2.MORPH_RECT, (5, 2))
+                                  )
+
+        img_list = []
+        contours, _ = cv2.findContours(dilation, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        for idx, c in enumerate(contours):
+            x, y, w, h = cv2.boundingRect(c)
+            X, Y = img.shape[:-1]
+            if w>X//23 and Y//4>h>Y//32:
+                img_list.append(self.resize_image(otsu2[y:y + h, x:x + w], 128, 64))
+                if self.show:
+                    rect = cv2.rectangle(result_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+        if self.show:
+            self.outputs = img, otsu1, otsu2, dilation, result_img
+            self.display_results()
+
+        return img_list
+
+    def display_results(self):
+        fig, ax = plt.subplots(2, 3, figsize=(12, 7))
+        image, otsu1, otsu2, dilation, result = self.outputs
+        ax[0, 0].imshow(image, cmap='gray')
+        ax[0, 0].set_title('Image')
+        ax[0, 1].imshow(otsu1, cmap='gray')
+        ax[0, 1].set_title('Otsuing')
+        ax[0, 2].imshow(image, cmap='gray')
+        ax[0, 2].set_title('Lines Removed')
+        ax[1, 0].imshow(otsu2, cmap='gray')
+        ax[1, 0].set_title('Re-Otsuing')
+        ax[1, 1].imshow(dilation, cmap='gray')
+        ax[1, 1].set_title('Dilated')
+        ax[1, 2].imshow(result, cmap='gray')
+        ax[1, 2].set_title('Result')
+        plt.show()
+
+    def get_train_test(self, split=0.7):
+        data = self.process_directory()
+        split_idx = int(len(data) * split)
+        return data[:split_idx], data[split_idx:]
+
+    def make_files(self, train_path='train.bin', test_path='test.bin', split=0.7):
+        train_data, test_data = self.get_train_test(split)
+        with open(train_path, 'wb') as train_file:
+            pickle.dump(train_data, train_file)
+        with open(test_path, 'wb') as test_file:
+            pickle.dump(test_data, test_file)
 
 
-    def run(self):
-        image_data = []
-        for img_path in os.listdir(self.working_directory):
-            image_data.append(self.create_image_array(os.path.join(self.working_directory, img_path)))
-        return self.equify(image_data)
-
-
-class Extractor:
-    def __init__(self, image_directory, show=False):
-        self.working_directory = image_directory
-        self.processing = Process(image_directory, show)
-
-
-    def extract(self):
-        data = self.processing.run()
-        return data
-    
-    def extract_train_test(self, train_size=0.7, test_size=0.3):
-        split = train_size + test_size
-        data = self.processing.run()
-        size = len(data)
-        return (data[:int(train_size/split * size)], data[int(test_size/split * size):])
-
-
-    def create_files(self, split=0.7):
-        data = self.processing.run()
-        size = len(data)
-        with open(os.path.join(os.path.dirname(self.working_directory), 'train_data.bin'), 'wb') as f:
-            pickle.dump(data[:int(split * size)], f)
-        with open(os.path.join(os.path.dirname(self.working_directory), 'test_data.bin'), 'wb') as f:
-            pickle.dump(data[int(split * size):], f)
+if __name__ == '__main__':
+    path = "images/7.jpg"
+    extractor = ImageProcessor(
+                image_shape=(512, 512),
+                show=True,
+                verbose=True)
+    words = extractor.process_image(path)
+    print('(', end='')
+    print(len(words), str(words[0].shape)[1:], sep=', ')
+    print(extractor.to_numpy(words).shape)
