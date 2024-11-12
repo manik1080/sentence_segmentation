@@ -125,7 +125,8 @@ class ImageProcessor:
 
 
 if __name__ == '__main__':
-    path = "images/7.jpg"
+    path = "images/7_resized.jpg"
+    # path = "images/2.jpg"
     extractor = ImageProcessor(
                 image_shape=(512, 512),
                 show=True,
