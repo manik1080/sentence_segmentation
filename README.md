@@ -1,2 +1,3 @@
-# text_extractor
-Detects text in an image and extracts it using image processing techniques.
+# setence_segmentation
+Detects words in an image, segments it, stores as an array of images.
+
